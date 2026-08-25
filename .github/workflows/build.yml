@@ -1,0 +1,147 @@
+name: Build Firmware
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  check_upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+      upstream_sha: ${{ steps.check.outputs.upstream_sha }}
+      tag_name: ${{ steps.check.outputs.tag_name }}
+    steps:
+      - name: Check for upstream changes
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          UPSTREAM_SHA=$(gh api repos/tobychui/DezKVM-Go/commits/main --jq .sha | cut -c1-7)
+          LATEST_RELEASE_TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name 2>/dev/null || echo "none")
+          if [[ "$LATEST_RELEASE_TAG" == *"$UPSTREAM_SHA"* && "${{ github.event_name }}" == "schedule" ]]; then
+            echo "No upstream changes. Skipping build."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "Proceeding with build."
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+            if [[ "${{ github.event_name }}" != "schedule" ]]; then
+              echo "tag_name=v$(date +'%Y.%m.%d')-$UPSTREAM_SHA-${{ github.run_number }}" >> $GITHUB_OUTPUT
+            else
+              echo "tag_name=v$(date +'%Y.%m.%d')-$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  build:
+    needs: check_upstream
+    if: needs.check_upstream.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: arm
+            platform: rp2040
+            board: pico
+            filename: dezkvm_pico1.uf2
+          - arch: arm
+            platform: rp2350-arm-s
+            board: pico2
+            filename: dezkvm_pico2_arm.uf2
+          - arch: riscv
+            platform: rp2350-riscv
+            board: pico2
+            filename: dezkvm_pico2_riscv.uf2
+    
+    steps:
+      - name: Checkout Firmware Builder
+        uses: actions/checkout@v7
+        with:
+          path: builder
+
+      - name: Checkout Upstream DezKVM-Go
+        uses: actions/checkout@v7
+        with:
+          repository: tobychui/DezKVM-Go
+          path: upstream
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          
+      - name: Bundle Web Assets
+        run: |
+          cp -r upstream/docs builder/docs
+          cd builder
+          python scripts/bundler.py
+          
+      - name: Install ARM Toolchain
+        if: matrix.arch == 'arm'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+
+      - name: Install RISC-V Toolchain
+        if: matrix.arch == 'riscv'
+        run: |
+          curl -L https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v14.2.0-2/xpack-riscv-none-elf-gcc-14.2.0-2-linux-x64.tar.gz -o riscv-gcc.tar.gz
+          tar -xzf riscv-gcc.tar.gz
+          echo "PICO_TOOLCHAIN_PATH=$PWD/xpack-riscv-none-elf-gcc-14.2.0-2" >> $GITHUB_ENV
+          
+      - name: Setup Pico SDK
+        run: |
+          git clone --depth 1 -b master https://github.com/raspberrypi/pico-sdk.git
+          cd pico-sdk
+          git submodule update --init
+          echo "PICO_SDK_PATH=$PWD" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          cd builder
+          # Remove pico-sdk from builder since we cloned it globally
+          sed -i 's|set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/pico-sdk)||g' CMakeLists.txt
+          mkdir build
+          cd build
+          if [ "${{ matrix.arch }}" = "riscv" ]; then
+            cmake .. -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }} -DPICO_TOOLCHAIN_PATH=${{ env.PICO_TOOLCHAIN_PATH }}
+          else
+            cmake .. -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }}
+          fi
+
+      - name: Build Firmware
+        run: |
+          cd builder/build
+          make -j$(nproc)
+          cp dezkvm_pico.uf2 ../${{ matrix.filename }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.platform }}
+          path: builder/${{ matrix.filename }}
+
+  release:
+    needs: [check_upstream, build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && needs.check_upstream.outputs.skip != 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check_upstream.outputs.tag_name }}
+          name: Release ${{ needs.check_upstream.outputs.tag_name }}
+          files: artifacts/*.uf2

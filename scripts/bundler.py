@@ -1,0 +1,126 @@
+import os
+import base64
+import gzip
+import re
+import urllib.request
+
+DOCS_DIR = "docs"
+OUT_FILE = "src/html_data.h"
+
+def download_file(url, filepath):
+    if not os.path.exists(filepath):
+        print(f"Downloading {url} to {filepath}...")
+        urllib.request.urlretrieve(url, filepath)
+
+def get_base64_data_uri(filepath, mime_type):
+    with open(filepath, "rb") as f:
+        data = f.read()
+    b64 = base64.b64encode(data).decode('utf-8')
+    return f"data:{mime_type};base64,{b64}"
+
+def download_assets():
+    download_file("https://cdnjs.cloudflare.com/ajax/libs/fomantic-ui/2.9.4/semantic.min.css", os.path.join(DOCS_DIR, "semantic.min.css"))
+    download_file("https://cdnjs.cloudflare.com/ajax/libs/fomantic-ui/2.9.4/semantic.min.js", os.path.join(DOCS_DIR, "semantic.min.js"))
+    download_file("https://cdnjs.cloudflare.com/ajax/libs/fomantic-ui/2.9.4/themes/default/assets/fonts/icons.woff2", os.path.join(DOCS_DIR, "icons.woff2"))
+
+def build():
+    download_assets()
+    with open(os.path.join(DOCS_DIR, "index.html"), "r") as f:
+        html = f.read()
+
+    # 1. Inject HTML modals
+    components = [
+        ("pasteBox", "paste-box.html"),
+        ("onscreenKeyboard", "onscreen-keyboard.html"),
+        ("quickAccess", "quick-access.html"),
+        ("copyBox", "copy-box.html"),
+        ("screenRecorder", "screen-recorder.html"),
+        ("settings-overlay", "settings.html")
+    ]
+    for div_id, filename in components:
+        with open(os.path.join(DOCS_DIR, filename), "r") as f:
+            comp_html = f.read()
+            # Remove any <script src="..."> inside the component HTML
+            comp_html = re.sub(r'<script src=".*?"></script>', '', comp_html)
+            # Inject into index.html placeholder
+            pattern = f'<div id="{div_id}"([^>]*)></div>'
+            replacement = f'<div id="{div_id}"\\1>\n{comp_html}\n</div>'
+            html = re.sub(pattern, replacement, html)
+
+    # 2. Remove $.load scripts from index.html
+    html = re.sub(r"\$\('#.*?'\)\.load\('.*?\.html'.*?\}\);", "", html, flags=re.DOTALL)
+    html = re.sub(r'\$\("#.*?"\)\.load\(".*?\.html".*?\}\);', '', html, flags=re.DOTALL)
+    html = re.sub(r'\$\("#.*?"\)\.load\(\'.*?\.html\'.*?\}\);', '', html, flags=re.DOTALL)
+
+    # 3. Inline CSS
+    with open(os.path.join(DOCS_DIR, "semantic.min.css"), "r") as f:
+        semantic_css = f.read()
+    with open(os.path.join(DOCS_DIR, "main.css"), "r") as f:
+        main_css = f.read()
+        
+    # Replace icons.woff2 in semantic_css
+    icons_uri = get_base64_data_uri(os.path.join(DOCS_DIR, "icons.woff2"), "font/woff2")
+    semantic_css = re.sub(r'url\([^)]*icons\.(woff2|woff|ttf|eot)[^)]*\)', f'url({icons_uri})', semantic_css)
+
+    # Convert img/font_logo.svg and favicon.png in HTML and CSS
+    favicon_uri = get_base64_data_uri(os.path.join(DOCS_DIR, "favicon.png"), "image/png")
+    logo_uri = get_base64_data_uri(os.path.join(DOCS_DIR, "img/font_logo.svg"), "image/svg+xml")
+    
+    html = html.replace('href="favicon.png"', f'href="{favicon_uri}"')
+    html = html.replace('src="img/font_logo.svg"', f'src="{logo_uri}"')
+    html = html.replace('url("img/font_logo.svg")', f'url("{logo_uri}")')
+    main_css = main_css.replace('url("../img/font_logo.svg")', f'url("{logo_uri}")')
+    main_css = main_css.replace('url("img/font_logo.svg")', f'url("{logo_uri}")')
+    
+    # Remove external css links
+    html = re.sub(r'<link rel="stylesheet".*?>', '', html)
+    
+    # Inject combined CSS
+    combined_css = f"<style>\n{semantic_css}\n{main_css}\n</style>"
+    html = html.replace('</head>', f'{combined_css}\n</head>')
+
+    # 4. Inline JS
+    js_files = [
+        "scripts/jquery-3.7.1.min.js",
+        "semantic.min.js",
+        "local-kvm.js",
+        "paste-box.js",
+        "onscreen-keyboard.js",
+        "quick-access.js",
+        "copy-box.js",
+        "scripts/jsmpg.js"
+    ]
+    combined_js = ""
+    for js_file in js_files:
+        try:
+            with open(os.path.join(DOCS_DIR, js_file), "r") as f:
+                combined_js += f"// {js_file}\n" + f.read() + "\n"
+        except FileNotFoundError:
+            print(f"Warning: {js_file} not found, skipping...")
+            
+    # Remove all <script src="..."></script> from html
+    html = re.sub(r'<script src=".*?"></script>', '', html)
+    
+    # Inject combined JS
+    html = html.replace('</body>', f'<script>\n{combined_js}\n</script>\n</body>')
+
+    # 5. GZIP and generate C header
+    compressed = gzip.compress(html.encode('utf-8'))
+    
+    headers = b"HTTP/1.0 200 OK\r\nServer: DezKVM-Pico\r\nContent-Type: text/html\r\nContent-Encoding: gzip\r\nConnection: close\r\n\r\n"
+    final_data = headers + compressed
+    
+    hex_array = ', '.join([f"0x{b:02x}" for b in final_data])
+    
+    os.makedirs(os.path.dirname(OUT_FILE), exist_ok=True)
+    with open(OUT_FILE, "w") as f:
+        f.write(f"// Generated by bundler.py\n")
+        f.write(f"#ifndef HTML_DATA_H\n")
+        f.write(f"#define HTML_DATA_H\n\n")
+        f.write(f"const unsigned char html_data[] = {{ {hex_array} }};\n")
+        f.write(f"const unsigned int html_data_len = {len(final_data)};\n\n")
+        f.write(f"#endif // HTML_DATA_H\n")
+
+if __name__ == "__main__":
+    build()
+    print(f"Bundled successfully into {OUT_FILE}")
