@@ -35,6 +35,7 @@
 /* Prevent having to link sys_arch.c (we don't test the API layers in unit tests) */
 #define NO_SYS                          1
 #define MEM_ALIGNMENT                   4
+#define MEM_SIZE                        (64 * 1024)
 #define LWIP_RAW                        0
 #define LWIP_NETCONN                    0
 #define LWIP_SOCKET                     0
@@ -51,11 +52,15 @@
 #define TCP_SND_BUF                     (4 * TCP_MSS)
 #define TCP_WND                         (4 * TCP_MSS)
 
-#define ETHARP_SUPPORT_STATIC_ENTRIES   1
-
-#define LWIP_HTTPD_CGI                  0
-#define LWIP_HTTPD_SSI                  0
-#define LWIP_HTTPD_SSI_INCLUDE_TAG      0
+#define ETHARP_SUPPORT_STATIC_ENTRIES 1 // Webserver options
+#define LWIP_HTTPD                  1
+#define LWIP_HTTPD_CUSTOM_FILES     1
+#define HTTPD_ENABLE_HTTPS          1
+#define LWIP_ALTCP                  1
+#define LWIP_ALTCP_TLS              1
+#define LWIP_ALTCP_TLS_MBEDTLS      1
+#define LWIP_HTTPD_SSI              0
+#define LWIP_HTTPD_CGI              0
 
 #define LWIP_SINGLE_NETIF               1
 
@@ -69,6 +74,7 @@
 #define LWIP_IPV6_SEND_ROUTER_SOLICIT   0
 
 #endif /* __LWIPOPTS_H__ */
-#undef LWIP_HTTPD_SUPPORT_11_KEEPALIVE
+
+#define MEMP_NUM_TCP_PCB 10
+
 #define LWIP_HTTPD_SUPPORT_11_KEEPALIVE 0
-#define LWIP_HTTPD_CUSTOM_FILES 1

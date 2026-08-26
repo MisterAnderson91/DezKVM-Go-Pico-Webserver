@@ -48,16 +48,27 @@ jobs:
           - arch: arm
             platform: rp2040
             board: pico
-            filename: dezkvm_pico1.uf2
+            filename: dezkvm_pico1
+          - arch: arm
+            platform: rp2040
+            board: pico_w
+            filename: dezkvm_pico1_w
           - arch: arm
             platform: rp2350-arm-s
             board: pico2
-            filename: dezkvm_pico2_arm.uf2
+            filename: dezkvm_pico2_arm
+          - arch: arm
+            platform: rp2350-arm-s
+            board: pico2_w
+            filename: dezkvm_pico2_arm_w
           - arch: riscv
             platform: rp2350-riscv
             board: pico2
-            filename: dezkvm_pico2_riscv.uf2
-    
+            filename: dezkvm_pico2_riscv
+          - arch: riscv
+            platform: rp2350-riscv
+            board: pico2_w
+            filename: dezkvm_pico2_riscv_w
     steps:
       - name: Checkout Firmware Builder
         uses: actions/checkout@v7
@@ -118,13 +129,13 @@ jobs:
         run: |
           cd builder/build
           make -j$(nproc)
-          cp dezkvm_pico.uf2 ../${{ matrix.filename }}
+          cp dezkvm_pico.uf2 ../${{ matrix.filename }}_${{ needs.check_upstream.outputs.tag_name }}.uf2
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v7
         with:
-          name: firmware-${{ matrix.platform }}
-          path: builder/${{ matrix.filename }}
+          name: firmware-${{ matrix.board }}-${{ matrix.arch }}
+          path: builder/${{ matrix.filename }}_${{ needs.check_upstream.outputs.tag_name }}.uf2
 
   release:
     needs: [check_upstream, build]

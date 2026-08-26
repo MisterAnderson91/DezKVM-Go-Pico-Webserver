@@ -43,24 +43,75 @@ The smartphone may be artificially picky about which Ethernet MAC address to rec
 try changing the first byte of tud_network_mac_address[] below from 0x02 to 0x00 (clearing bit 1).
 */
 
-#include "hardware/pwm.h"
-#include "hardware/gpio.h"
 #include "bsp/board_api.h"
 #include "tusb.h"
 
 #include "dhserver.h"
 #include "dnserver.h"
 #include "lwip/apps/httpd.h"
+#include "lwip/altcp_tls.h"
+#include "cert_data.h"
+#include "mbedtls/platform_time.h"
 #include "lwip/ethip6.h"
 #include "lwip/init.h"
 #include "lwip/timeouts.h"
 
-#ifdef INCLUDE_IPERF
-  #include "lwip/apps/lwiperf.h"
-#endif
+
 
 #define INIT_IP4(a, b, c, d) \
   { PP_HTONL(LWIP_MAKEU32(a, b, c, d)) }
+
+
+#include "hardware/pwm.h"
+#include "pico/stdlib.h"
+#if defined(CYW43_WL_GPIO_LED_PIN)
+#include "pico/cyw43_arch.h"
+#endif
+
+static uint32_t led_activity_timer = 0;
+static uint slice_num;
+static uint chan;
+
+static void init_led_pwm(void) {
+#if defined(CYW43_WL_GPIO_LED_PIN)
+    cyw43_arch_init();
+#elif defined(PICO_DEFAULT_LED_PIN)
+    gpio_set_function(PICO_DEFAULT_LED_PIN, GPIO_FUNC_PWM);
+    slice_num = pwm_gpio_to_slice_num(PICO_DEFAULT_LED_PIN);
+    chan = pwm_gpio_to_channel(PICO_DEFAULT_LED_PIN);
+    pwm_set_wrap(slice_num, 1000);
+    pwm_set_chan_level(slice_num, chan, 200); 
+    pwm_set_enabled(slice_num, true);
+#endif
+}
+
+static void update_led(void) {
+#if defined(CYW43_WL_GPIO_LED_PIN)
+    if (led_activity_timer > 0 && board_millis() < led_activity_timer) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
+    } else {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
+        led_activity_timer = 0;
+    }
+#elif defined(PICO_DEFAULT_LED_PIN)
+    if (led_activity_timer > 0 && board_millis() < led_activity_timer) {
+        pwm_set_chan_level(slice_num, chan, 1000);
+    } else {
+        pwm_set_chan_level(slice_num, chan, 200);
+        led_activity_timer = 0;
+    }
+#endif
+}
+
+mbedtls_ms_time_t mbedtls_ms_time(void) {
+    return time_us_64() / 1000;
+}
+
+mbedtls_time_t my_mbedtls_time(mbedtls_time_t* time) {
+    mbedtls_time_t t = time_us_64() / 1000000;
+    if (time) *time = t;
+    return t;
+}
 
 /* lwip context */
 static struct netif netif_data;
@@ -71,19 +122,17 @@ static struct pbuf *received_frame;
 /* this is used by this code, ./class/net/net_driver.c, and usb_descriptors.c */
 /* ideally speaking, this should be generated from the hardware's unique ID (if available) */
 /* it is suggested that the first byte is 0x02 to indicate a link-local address */
-uint8_t tud_network_mac_address[6] = {0x02, 0x02, 0x84, 0x6A, 0x96, 0x00};
+uint8_t tud_network_mac_address[6] = {0x02, 0x02, 0x84, 0x6A, 0x96, 0x01};
 
 /* network parameters of this MCU */
 static const ip4_addr_t ipaddr = INIT_IP4(192, 168, 7, 1);
-static const ip4_addr_t netmask = INIT_IP4(255, 255, 255, 0);
+static const ip4_addr_t netmask = INIT_IP4(255, 255, 255, 252);
 static const ip4_addr_t gateway = INIT_IP4(0, 0, 0, 0);
 
 /* database IP addresses that can be offered to the host; this must be in RAM to store assigned MAC addresses */
 static dhcp_entry_t entries[] = {
     /* mac ip address               lease time */
     {{0}, INIT_IP4(192, 168, 7, 2), 24 * 60 * 60},
-    {{0}, INIT_IP4(192, 168, 7, 3), 24 * 60 * 60},
-    {{0}, INIT_IP4(192, 168, 7, 4), 24 * 60 * 60},
 };
 
 static const dhcp_config_t dhcp_config = {
@@ -105,6 +154,7 @@ static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
 
     /* if the network driver can accept another packet, we make it happen */
     if (tud_network_can_xmit(p->tot_len)) {
+      led_activity_timer = board_millis() + 50;
       tud_network_xmit(p, 0 /* unused for this example */);
       return ERR_OK;
     }
@@ -165,16 +215,13 @@ bool dns_query_proc(const char *name, ip4_addr_t *addr) {
   return false;
 }
 
-volatile uint32_t network_activity_counter = 0;
-
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
-  network_activity_counter = 50000;
-
   /* this shouldn't happen, but if we get another packet before
   parsing the previous, we must signal our inability to accept it */
   if (received_frame) return false;
 
   if (size) {
+    led_activity_timer = board_millis() + 50;
     struct pbuf *p = pbuf_alloc(PBUF_RAW, size, PBUF_POOL);
 
     if (p) {
@@ -190,8 +237,6 @@ bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
 }
 
 uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
-  network_activity_counter = 50000;
-
   struct pbuf *p = (struct pbuf *) ref;
 
   (void) arg; /* unused for this example */
@@ -227,14 +272,7 @@ void tud_network_init_cb(void) {
 int main(void) {
   /* initialize TinyUSB */
   board_init();
-
-  // Initialize PWM on LED pin 25
-  const uint LED_PIN = 25;
-  gpio_set_function(LED_PIN, GPIO_FUNC_PWM);
-  uint slice_num = pwm_gpio_to_slice_num(LED_PIN);
-  pwm_set_wrap(slice_num, 100);
-  pwm_set_chan_level(slice_num, PWM_CHAN_B, 20); // 20% brightness
-  pwm_set_enabled(slice_num, true);
+  init_led_pwm();
 
   // init device stack on configured roothub port
   tusb_rhport_init_t dev_init = {
@@ -252,23 +290,19 @@ int main(void) {
   while (!netif_is_up(&netif_data));
   while (dhserv_init(&dhcp_config) != ERR_OK);
   while (dnserv_init(IP_ADDR_ANY, 53, dns_query_proc) != ERR_OK);
-  httpd_init();
+  mbedtls_platform_set_time(my_mbedtls_time);
+  struct altcp_tls_config *conf = altcp_tls_create_config_server_privkey_cert(
+      key_pem, key_pem_len, NULL, 0, cert_pem, cert_pem_len);
+  httpd_inits(conf);
 
 
 
   while (1) {
     tud_task();
     service_traffic();
-    
-    if (network_activity_counter > 0) {
-        network_activity_counter--;
-        pwm_set_gpio_level(25, 100);
-    } else {
-        pwm_set_gpio_level(25, 20);
-    }
+    update_led();
   }
 
   return 0;
 }
-
 

@@ -14,25 +14,36 @@ pico_sdk_init()
 # Define the target executable
 add_executable(dezkvm_pico
     src/main.c
-    src/fs_custom.c
     src/usb_descriptors.c
-    src/dhserver.c
-    src/dnserver.c
-    src/rndis_reports.c
+    src/fs.c
+    ${PICO_SDK_PATH}/lib/tinyusb/lib/networking/dhserver.c
+    ${PICO_SDK_PATH}/lib/tinyusb/lib/networking/dnserver.c
+    ${PICO_SDK_PATH}/lib/tinyusb/lib/networking/rndis_reports.c
 )
 
-# Pull in our pico_stdlib and tinyusb network/lwip dependencies
+# Pull in our pico_stdlib and tinyusb network/lwip/mbedtls dependencies
 target_link_libraries(dezkvm_pico
     pico_stdlib
     hardware_pwm
     tinyusb_device
     tinyusb_board
-    pico_lwip_http
     pico_lwip_nosys
+    pico_lwip_http
+    pico_mbedtls
+    pico_lwip_mbedtls
+    pico_cyw43_arch_none
 )
 
-# Add include directory for lwipopts.h
-target_include_directories(dezkvm_pico PRIVATE src)
+# Add include directories
+target_include_directories(dezkvm_pico PRIVATE
+    src
+    ${PICO_SDK_PATH}/lib/tinyusb/lib/networking
+)
+
+# Add compile definitions
+target_compile_definitions(dezkvm_pico PRIVATE
+    NO_SYS=1
+)
 
 # Ensure USB output, disable UART output
 pico_enable_stdio_usb(dezkvm_pico 1)
