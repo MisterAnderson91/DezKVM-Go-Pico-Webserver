@@ -127,7 +127,7 @@ def build():
         f.write(f"const web_file_t web_files[] = {{\n")
         f.write(f"    {{\"/\", file_data_0, sizeof(file_data_0)}},\n")
         f.write(f"    {{\"/index.html\", file_data_0, sizeof(file_data_0)}},\n")
-        f.write(f"};\n")
+        f.write("};\n")
         f.write(f"const int num_web_files = 2;\n\n")
         f.write(f"#endif // HTML_DATA_H\n")
 
