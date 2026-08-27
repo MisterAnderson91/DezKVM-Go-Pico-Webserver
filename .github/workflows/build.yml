@@ -120,9 +120,9 @@ jobs:
           mkdir build
           cd build
           if [ "${{ matrix.arch }}" = "riscv" ]; then
-            cmake .. -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }} -DPICO_TOOLCHAIN_PATH=${{ env.PICO_TOOLCHAIN_PATH }}
+            cmake .. -DCMAKE_BUILD_TYPE=MinSizeRel -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }} -DPICO_TOOLCHAIN_PATH=${{ env.PICO_TOOLCHAIN_PATH }}
           else
-            cmake .. -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }}
+            cmake .. -DCMAKE_BUILD_TYPE=MinSizeRel -DPICO_BOARD=${{ matrix.board }} -DPICO_PLATFORM=${{ matrix.platform }}
           fi
 
       - name: Build Firmware
