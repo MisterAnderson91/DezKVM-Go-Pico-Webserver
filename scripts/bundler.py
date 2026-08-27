@@ -80,29 +80,38 @@ def build():
     html = html.replace('</head>', f'{combined_css}\n</head>')
 
     # 4. Inline JS
-    js_files = [
-        "scripts/jquery-3.7.1.min.js",
-        "semantic.min.js",
-        "local-kvm.js",
+    def replace_script(match):
+        src = match.group(1)
+        filename = src.split('/')[-1]
+        filepath = os.path.join(DOCS_DIR, filename)
+        if not os.path.exists(filepath):
+            filepath = os.path.join(DOCS_DIR, src)
+            
+        try:
+            with open(filepath, "r") as f:
+                return f"<script>\n// {src}\n{f.read()}\n;\n</script>"
+        except FileNotFoundError:
+            print(f"Warning: {filepath} not found, skipping inline.")
+            return match.group(0)
+            
+    html = re.sub(r'<script\s+src="([^"]+)"[^>]*></script>', replace_script, html)
+    
+    # Inject dynamically loaded scripts at the bottom
+    dynamic_js_files = [
         "paste-box.js",
         "onscreen-keyboard.js",
         "quick-access.js",
-        "copy-box.js",
-        "scripts/jsmpg.js"
+        "copy-box.js"
     ]
-    combined_js = ""
-    for js_file in js_files:
+    dynamic_js = ""
+    for js_file in dynamic_js_files:
         try:
             with open(os.path.join(DOCS_DIR, js_file), "r") as f:
-                combined_js += f"// {js_file}\n" + f.read() + "\n"
+                dynamic_js += f"// {js_file}\n" + f.read() + ";\n"
         except FileNotFoundError:
             print(f"Warning: {js_file} not found, skipping...")
             
-    # Remove all <script src="..."></script> from html
-    html = re.sub(r'<script src=".*?"></script>', '', html)
-    
-    # Inject combined JS
-    html = html.replace('</body>', f'<script>\n{combined_js}\n</script>\n</body>')
+    html = html.replace('</body>', f'<script>\n{dynamic_js}\n</script>\n</body>')
 
     # 5. GZIP and generate C header
     compressed = gzip.compress(html.encode('utf-8'))
