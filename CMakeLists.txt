@@ -31,8 +31,11 @@ target_link_libraries(dezkvm_pico
     pico_lwip_http
     pico_mbedtls
     pico_lwip_mbedtls
-    pico_cyw43_arch_none
 )
+
+if (TARGET pico_cyw43_arch_none)
+    target_link_libraries(dezkvm_pico pico_cyw43_arch_none)
+endif()
 
 # Add include directories
 target_include_directories(dezkvm_pico PRIVATE
